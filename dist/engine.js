@@ -1,0 +1,407 @@
+export const day = ()=>new Date().toLocaleDateString('en-CA');
+export const uid = ()=>crypto.randomUUID();
+export const money = (v)=>new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: v % 1 ? 2 : 0
+    }).format(v);
+export const time = (v)=>{
+    const h = Math.floor(v / 60);
+    return `${h % 12 || 12}:${String(v % 60).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+};
+export const example = 'Feed 100 people tonight by 7 PM. We have $100 and refrigeration at our shelter.';
+export const shelter = {
+    name: 'Hope Community Shelter',
+    address: '68 Peachtree Street SW, Atlanta, GA',
+    lat: 33.751,
+    lng: -84.391
+};
+const base = {
+    availableFrom: 960,
+    availableUntil: 1110,
+    storageType: 'Room temperature',
+    dietaryTags: [],
+    status: 'Available'
+};
+export function seed() {
+    const resources = [
+        {
+            ...base,
+            id: 'sunrise',
+            organizationId: 'org-sunrise',
+            provider: 'Sunrise Restaurant',
+            name: 'Prepared meals & sides',
+            category: 'meal',
+            quantity: 40,
+            unit: 'meals',
+            estimatedValue: 320,
+            lat: 33.773,
+            lng: -84.38,
+            address: '675 Ponce de Leon Ave NE, Atlanta, GA',
+            availableUntil: 1080,
+            storageType: 'Refrigerated'
+        },
+        {
+            ...base,
+            id: 'freshmart',
+            organizationId: 'org-freshmart',
+            provider: 'FreshMart Grocery',
+            name: 'Produce & salad ingredients',
+            category: 'meal',
+            quantity: 35,
+            unit: 'servings',
+            estimatedValue: 175,
+            lat: 33.787,
+            lng: -84.397,
+            address: '915 Spring St NW, Atlanta, GA',
+            dietaryTags: [
+                'Vegetarian',
+                'Vegan',
+                'Gluten Free'
+            ],
+            storageType: 'Refrigerated'
+        },
+        {
+            ...base,
+            id: 'water',
+            organizationId: 'org-center',
+            provider: 'Community Center',
+            name: 'Bottled water',
+            category: 'drink',
+            quantity: 24,
+            unit: 'bottles',
+            estimatedValue: 36,
+            lat: 33.763,
+            lng: -84.409,
+            address: '365 Luckie St NW, Atlanta, GA'
+        },
+        {
+            ...base,
+            id: 'bakery',
+            organizationId: 'org-bakery',
+            provider: 'Little Grain Bakery',
+            name: 'Bread & pastries',
+            category: 'meal',
+            quantity: 25,
+            mealEquivalent: 5,
+            usableQuantity: 16,
+            unit: 'portions',
+            estimatedValue: 81,
+            lat: 33.779,
+            lng: -84.387,
+            address: '800 Peachtree St NE, Atlanta, GA',
+            dietaryTags: [
+                'Vegetarian'
+            ]
+        },
+        {
+            ...base,
+            id: 'refill',
+            organizationId: 'org-hope',
+            provider: 'Hope Shelter refill station',
+            name: 'Drinking water refills',
+            category: 'drink',
+            quantity: 76,
+            unit: 'servings',
+            estimatedValue: 1.16,
+            lat: shelter.lat,
+            lng: shelter.lng,
+            address: shelter.address
+        },
+        {
+            ...base,
+            id: 'supplies',
+            organizationId: 'org-school',
+            provider: 'Atlanta Learning Collective',
+            name: 'School supply kits',
+            category: 'supplies',
+            quantity: 40,
+            unit: 'kits',
+            estimatedValue: 400,
+            lat: 33.768,
+            lng: -84.36,
+            address: '101 Edgewood Ave SE, Atlanta, GA'
+        },
+        {
+            ...base,
+            id: 'space',
+            organizationId: 'org-center',
+            provider: 'Community Center',
+            name: 'Community kitchen',
+            category: 'space',
+            quantity: 1,
+            unit: 'space',
+            estimatedValue: 120,
+            lat: 33.763,
+            lng: -84.409,
+            address: '365 Luckie St NW, Atlanta, GA'
+        },
+        {
+            ...base,
+            id: 'transport',
+            organizationId: 'alex',
+            provider: 'Alex Morgan',
+            name: 'SUV • large capacity',
+            category: 'transportation',
+            quantity: 1,
+            unit: 'vehicle',
+            estimatedValue: 0,
+            lat: 33.769,
+            lng: -84.371,
+            address: 'Old Fourth Ward, Atlanta, GA',
+            availableUntil: 1140
+        }
+    ];
+    const m = compile(example);
+    m.id = 'demo';
+    match(m, resources, {
+        id: 'alex',
+        availableFrom: 960,
+        availableUntil: 1140,
+        lat: 33.769,
+        lng: -84.371
+    });
+    return {
+        version: 1,
+        date: day(),
+        role: 'Nonprofit',
+        resources,
+        missions: [
+            m
+        ],
+        users: [
+            {
+                id: 'demo-user',
+                name: 'Demo user'
+            }
+        ],
+        organizations: [
+            ...new Map(resources.map((r)=>[
+                    r.organizationId,
+                    {
+                        id: r.organizationId,
+                        name: r.provider
+                    }
+                ])).values()
+        ],
+        volunteers: [
+            {
+                id: 'alex',
+                name: 'Alex Morgan',
+                vehicleType: 'SUV',
+                capacity: 'Large',
+                availableFrom: 960,
+                availableUntil: 1140,
+                lat: 33.769,
+                lng: -84.371
+            }
+        ],
+        impactRecords: []
+    };
+}
+export function compile(text, extra = {}) {
+    const people = Number(text.match(/(\d+)\s*(?:people|persons|students|children|families|meals)/i)?.[1] || 100);
+    const cash = Number(text.match(/\$\s*(\d+(?:\.\d+)?)/)?.[1] || 0);
+    const t = text.match(/(?:by|at)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+    let deadline = t ? (Number(t[1]) % 12 + (t[3]?.toLowerCase() === 'am' ? 0 : 12)) * 60 + Number(t[2] || 0) : 1140;
+    const category = /school|supplies|kits|laptop/i.test(text) ? 'supplies' : /clothing|coat|hygiene/i.test(text) ? 'supplies' : 'meal';
+    return {
+        id: uid(),
+        title: category === 'meal' ? `Dinner for ${people} People` : `Supplies for ${people} People`,
+        description: text,
+        people,
+        budget: extra.budget !== '' && extra.budget !== undefined ? Number(extra.budget) : cash,
+        deadline: extra.deadline ? Number(extra.deadline.split(':')[0]) * 60 + Number(extra.deadline.split(':')[1]) : deadline,
+        address: extra.address || shelter.address,
+        lat: shelter.lat,
+        lng: shelter.lng,
+        refrigeration: !/(?:no|without) refrigeration/i.test(text) && /refrigerat/i.test(text),
+        dietaryTags: [
+            'Vegan',
+            'Vegetarian',
+            'Halal',
+            'Gluten Free'
+        ].filter((x)=>text.toLowerCase().includes(x.toLowerCase())),
+        requirements: [
+            {
+                category,
+                quantity: people,
+                unit: category === 'meal' ? 'servings' : 'kits',
+                priority: 'required'
+            },
+            ...category === 'meal' ? [
+                {
+                    category: 'drink',
+                    quantity: people,
+                    unit: 'servings',
+                    priority: 'preferred'
+                }
+            ] : [],
+            {
+                category: 'transportation',
+                quantity: 1,
+                unit: 'vehicle',
+                priority: 'required'
+            }
+        ],
+        status: 'Draft',
+        matches: [],
+        originalCost: 0,
+        communityValue: 0,
+        gap: 0,
+        contributions: [],
+        route: [],
+        distance: 0,
+        duration: 0
+    };
+}
+export function distance(a, b) {
+    const rad = Math.PI / 180;
+    const dlat = (a.lat - b.lat) * rad, dlng = (a.lng - b.lng) * rad;
+    return 3958.8 * 2 * Math.asin(Math.sqrt(Math.sin(dlat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dlng / 2) ** 2));
+}
+export function optimize(resources, mission, volunteer) {
+    const left = resources.filter((r)=>r.organizationId !== 'org-hope');
+    const stops = [];
+    let from = volunteer, clock = Math.max(975, volunteer.availableFrom), miles = 0;
+    while(left.length){
+        left.sort((a, b)=>distance(from, a) - distance(from, b));
+        const r = left.shift();
+        const d = distance(from, r) * 1.35;
+        clock = Math.max(clock + Math.ceil(d / 20 * 60) + 8, r.availableFrom);
+        if (clock > r.availableUntil) continue;
+        miles += d;
+        stops.push({
+            id: uid(),
+            resourceId: r.id,
+            provider: r.provider,
+            name: r.name,
+            address: r.address,
+            lat: r.lat,
+            lng: r.lng,
+            scheduledTime: clock,
+            completedAt: null
+        });
+        clock += 12;
+        from = r;
+    }
+    const d = distance(from, mission) * 1.35;
+    miles += d;
+    clock += Math.ceil(d / 20 * 60) + 8;
+    stops.push({
+        id: uid(),
+        resourceId: null,
+        provider: 'Hope Community Shelter',
+        name: 'Final delivery',
+        address: mission.address,
+        lat: mission.lat,
+        lng: mission.lng,
+        scheduledTime: clock,
+        completedAt: null
+    });
+    return {
+        stops,
+        distance: Math.round(miles * 10) / 10,
+        duration: clock - 975
+    };
+}
+export function match(m, resources, volunteer) {
+    let results = [];
+    let missing = [];
+    for (const req of m.requirements){
+        let remaining = req.quantity;
+        const candidates = resources.filter((r)=>r.category === req.category && [
+                'Available',
+                'Matched'
+            ].includes(r.status) && r.availableFrom < m.deadline && r.availableUntil >= Math.max(975, r.availableFrom) + 15 && (r.storageType === 'Room temperature' || m.refrigeration && r.storageType === 'Refrigerated') && m.dietaryTags.every((t)=>r.dietaryTags.includes(t)));
+        candidates.sort((a, b)=>score(b, req, m) - score(a, req, m));
+        for (const r of candidates){
+            if (remaining <= 0) break;
+            const equiv = r.mealEquivalent ?? r.quantity;
+            const fulfill = Math.min(remaining, equiv);
+            const allocation = Math.min(r.usableQuantity ?? r.quantity, Math.ceil(fulfill / equiv * (r.usableQuantity ?? r.quantity)));
+            const actual = Math.min(remaining, allocation / (r.usableQuantity ?? r.quantity) * equiv);
+            const value = r.estimatedValue * allocation / r.quantity;
+            results.push({
+                resourceId: r.id,
+                allocatedQuantity: allocation,
+                fulfilledQuantity: actual,
+                category: req.category,
+                value,
+                matchScore: score(r, req, m),
+                reason: `Provides ${Math.round(actual / req.quantity * 100)}% of your ${req.category} requirement, ${distance(r, m).toFixed(1)} miles away. Pickup before ${time(r.availableUntil)}; ${r.storageType.toLowerCase()} storage fits.`
+            });
+            remaining -= actual;
+        }
+        missing.push({
+            ...req,
+            missing: Math.max(0, remaining)
+        });
+    }
+    const plan = optimize(results.map((x)=>resources.find((r)=>r.id === x.resourceId)).filter((r)=>![
+            'transportation',
+            'space'
+        ].includes(r.category)), m, volunteer);
+    const invalid = results.filter((x)=>{
+        const r = resources.find((r)=>r.id === x.resourceId);
+        return r.organizationId !== 'org-hope' && r.category !== 'transportation' && !plan.stops.some((s)=>s.resourceId === r.id);
+    });
+    if (invalid.length) {
+        return match(m, resources.filter((r)=>!invalid.some((x)=>x.resourceId === r.id)), volunteer);
+    }
+    m.matches = results;
+    m.communityValue = Math.round(results.reduce((s, x)=>s + x.value, 0) * 100) / 100;
+    const purchase = missing.reduce((s, x)=>s + x.missing * (x.category === 'meal' ? 1.4 : x.category === 'drink' ? .4 : x.category === 'supplies' ? 10 : 25), 0);
+    m.originalCost = Math.round((m.communityValue + purchase) * 100) / 100;
+    m.gap = Math.round(purchase * 100) / 100;
+    m.route = plan.stops;
+    m.distance = plan.distance;
+    m.duration = plan.duration;
+    m.status = 'Ready for review';
+    return {
+        mission: m,
+        missing
+    };
+}
+function score(r, req, m) {
+    return Math.round((.3 * Math.max(0, 1 - distance(r, m) / 15) + .3 * Math.min(1, (r.mealEquivalent ?? r.quantity) / req.quantity) + .2 * Math.max(0, 1 - (r.availableUntil - 975) / 240) + .2 * (r.storageType === 'Room temperature' ? 1 : .8)) * 100);
+}
+export function outstanding(m) {
+    return Math.max(0, Math.round((m.gap - m.contributions.reduce((s, x)=>s + x.amount, 0)) * 100) / 100);
+}
+export function fund(m, amount, name) {
+    const a = Math.min(amount, outstanding(m));
+    if (a > 0) m.contributions.push({
+        id: uid(),
+        missionId: m.id,
+        amount: a,
+        sponsorName: name || 'Community sponsor',
+        createdAt: new Date().toISOString(),
+        simulated: true
+    });
+    if (outstanding(m) === 0) m.status = 'Funded';
+    return a;
+}
+export function completeStop(m) {
+    const stop = m.route.find((x)=>!x.completedAt);
+    if (!stop) return false;
+    stop.completedAt = new Date().toISOString();
+    m.status = m.route.every((x)=>x.completedAt) ? 'Completed' : 'In progress';
+    return true;
+}
+export function impact(m) {
+    return {
+        missionId: m.id,
+        peopleServed: m.people,
+        foodWeight: Math.round(m.matches.filter((x)=>x.category === 'meal').reduce((s, x)=>s + x.fulfilledQuantity, 0) * 2.25),
+        estimatedValueSaved: m.communityValue,
+        cashSpent: m.contributions.reduce((s, x)=>s + x.amount, 0),
+        partners: new Set(m.matches.filter((x)=>![
+                'transportation'
+            ].includes(x.category)).map((x)=>x.resourceId).filter((x)=>x !== 'refill')).size,
+        volunteerHours: Math.round(m.duration / 60 * 10) / 10,
+        miles: m.distance,
+        wastePrevented: Math.round(m.matches.filter((x)=>x.category === 'meal').reduce((s, x)=>s + x.fulfilledQuantity, 0) * 2.25),
+        estimatedCO2: Math.round(m.matches.filter((x)=>x.category === 'meal').reduce((s, x)=>s + x.fulfilledQuantity, 0) * 2.25 * .9)
+    };
+}

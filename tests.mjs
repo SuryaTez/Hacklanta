@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {seed,compile,match,fund,outstanding,completeStop,impact,optimize} from './dist/engine.js';
+const d=seed();const m=d.missions[0];match(m,d.resources,d.volunteers[0]);
+assert.equal(m.originalCost,612);assert.equal(m.communityValue,584);assert.equal(m.gap,28);
+assert.equal(m.matches.filter(x=>x.category==='meal').reduce((s,x)=>s+x.fulfilledQuantity,0),80);
+assert.equal(m.matches.filter(x=>x.category==='drink').reduce((s,x)=>s+x.fulfilledQuantity,0),100);
+assert.equal(m.route.at(-1).provider,'Hope Community Shelter');assert.ok(m.route.at(-1).scheduledTime<=m.deadline);
+assert.equal(fund(m,10,'Test sponsor'),10);assert.equal(outstanding(m),18);assert.equal(fund(m,1000,'Another sponsor'),18);assert.equal(outstanding(m),0);assert.equal(m.status,'Funded');
+while(m.status!=='Completed')completeStop(m);assert.equal(m.route.filter(x=>x.completedAt).length,m.route.length);assert.equal(completeStop(m),false);
+const x=impact(m);assert.equal(x.peopleServed,100);assert.equal(x.foodWeight,180);assert.equal(x.estimatedValueSaved,584);assert.equal(x.cashSpent,28);assert.equal(x.partners,4);
+const noFridge=compile('Feed 50 people by 7 PM. We have $75 and no refrigeration.');match(noFridge,d.resources,d.volunteers[0]);assert.equal(noFridge.refrigeration,false);assert.ok(!noFridge.matches.some(x=>d.resources.find(r=>r.id===x.resourceId).storageType==='Refrigerated'));
+const vegan=compile('Feed 20 people vegan dinner by 7 PM with refrigeration.');match(vegan,d.resources,d.volunteers[0]);assert.ok(vegan.matches.every(x=>d.resources.find(r=>r.id===x.resourceId).dietaryTags.includes('Vegan')));
+const expired=d.resources.map(r=>({...r,availableUntil:970}));const empty=compile('Feed 100 people by 7 PM with refrigeration.');match(empty,expired,d.volunteers[0]);assert.equal(empty.matches.length,0);assert.ok(empty.gap>0);
+const supplies=compile('Provide school supplies for 40 students by 7 PM. We have $50.');assert.equal(supplies.requirements[0].category,'supplies');assert.equal(supplies.people,40);assert.equal(supplies.budget,50);
+const large=compile('Feed 200 people by 7 PM. We have $100 and refrigeration.');match(large,d.resources,d.volunteers[0]);assert.ok(large.gap>28);
+console.log('Passed: exact demo economics, requirement coverage, dietary/storage/expiry rejection, natural language extraction, partial funding cap, pickup progression, completion impact, and scalable gaps.');
