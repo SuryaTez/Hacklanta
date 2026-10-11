@@ -16,6 +16,32 @@ export const shelter = {
     lat: 33.751,
     lng: -84.391
 };
+const knownCoordinates = {
+    [shelter.address]: [
+        shelter.lat,
+        shelter.lng
+    ],
+    '675 Ponce de Leon Ave NE, Atlanta, GA': [
+        33.773,
+        -84.38
+    ],
+    '915 Spring St NW, Atlanta, GA': [
+        33.787,
+        -84.397
+    ],
+    '365 Luckie St NW, Atlanta, GA': [
+        33.763,
+        -84.409
+    ],
+    '800 Peachtree St NE, Atlanta, GA': [
+        33.779,
+        -84.387
+    ],
+    '101 Edgewood Ave SE, Atlanta, GA': [
+        33.768,
+        -84.36
+    ]
+};
 const base = {
     availableFrom: 960,
     availableUntil: 1110,
@@ -213,8 +239,9 @@ export function compile(text, extra = {}) {
         budget: extra.budget !== '' && extra.budget !== undefined ? Number(extra.budget) : cash,
         deadline: extra.deadline ? Number(extra.deadline.split(':')[0]) * 60 + Number(extra.deadline.split(':')[1]) : deadline,
         address: extra.address || shelter.address,
-        lat: shelter.lat,
-        lng: shelter.lng,
+        lat: extra.lat ?? knownCoordinates[extra.address || shelter.address]?.[0] ?? shelter.lat,
+        lng: extra.lng ?? knownCoordinates[extra.address || shelter.address]?.[1] ?? shelter.lng,
+        coordinatesResolved: Boolean(extra.lat !== undefined && extra.lng !== undefined || knownCoordinates[extra.address || shelter.address]),
         refrigeration: !/(?:no|without) refrigeration/i.test(text) && /refrigerat/i.test(text),
         dietaryTags: [
             'Vegan',
@@ -306,11 +333,25 @@ export function optimize(resources, mission, volunteer) {
     };
 }
 export function match(m, resources, volunteer) {
+    if (!Number.isInteger(m.deadline) || m.deadline < 960 || m.deadline > 1439) {
+        m.matches = [];
+        m.route = [];
+        m.communityValue = 0;
+        m.originalCost = 0;
+        m.gap = 0;
+        return {
+            mission: m,
+            missing: m.requirements.map((r)=>({
+                    ...r,
+                    missing: r.quantity
+                }))
+        };
+    }
     let results = [];
     let missing = [];
     for (const req of m.requirements){
         let remaining = req.quantity;
-        const candidates = resources.filter((r)=>r.category === req.category && [
+        const candidates = resources.filter((r)=>(r.category === req.category || req.category === 'meal' && r.category === 'side') && (!r.missionId || r.missionId === m.id) && [
                 'Available',
                 'Matched'
             ].includes(r.status) && r.availableFrom < m.deadline && r.availableUntil >= Math.max(975, r.availableFrom) + 15 && (r.storageType === 'Room temperature' || m.refrigeration && r.storageType === 'Refrigerated') && m.dietaryTags.every((t)=>r.dietaryTags.includes(t)));
@@ -370,7 +411,10 @@ export function outstanding(m) {
     return Math.max(0, Math.round((m.gap - m.contributions.reduce((s, x)=>s + x.amount, 0)) * 100) / 100);
 }
 export function fund(m, amount, name) {
-    const a = Math.min(amount, outstanding(m));
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
+    const alreadyFunded = m.contributions.reduce((s, x)=>s + x.amount, 0);
+    const remainingBudget = Math.max(0, m.budget - alreadyFunded);
+    const a = Math.min(amount, outstanding(m), remainingBudget);
     if (a > 0) m.contributions.push({
         id: uid(),
         missionId: m.id,

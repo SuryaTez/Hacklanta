@@ -1,1 +1,1 @@
-{"name":"missionmesh","version":"1.0.0","type":"module","scripts":{"build":"node build.mjs","test":"node tests.mjs","dev":"python3 server.py"}}
+{"name":"missionmesh","version":"1.0.0","type":"module","scripts":{"build":"node build.mjs","test":"node tests.mjs","dev":"py server.py"}}
