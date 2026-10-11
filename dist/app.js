@@ -860,4 +860,117 @@ function downloadImpact(text) {
     setTimeout(()=>URL.revokeObjectURL(link.href), 1000);
     toast('Impact downloaded.');
 }
+function ensureMobileMenu() {
+    if (!document.querySelector('.skip-link')) {
+        const skip = document.createElement('a');
+        skip.className = 'skip-link';
+        skip.href = '#app';
+        skip.textContent = 'Skip to content';
+        document.body.prepend(skip);
+    }
+    const app = document.getElementById('app');
+    if (!app) return;
+    const top = document.querySelector('.top-actions');
+    if (!top) return;
+    let toggle = top.querySelector('.mobile-menu-toggle');
+    if (!toggle) {
+        toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'mobile-menu-toggle';
+        toggle.setAttribute('aria-controls', 'mobile-menu');
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.innerHTML = 'Menu ' + I('chevron', 16);
+        top.append(toggle);
+    }
+    let menu = document.getElementById('mobile-menu');
+    if (!menu) {
+        menu = document.createElement('nav');
+        menu.id = 'mobile-menu';
+        menu.className = 'mobile-menu';
+        menu.setAttribute('aria-label', 'Mobile navigation');
+        menu.hidden = true;
+        menu.innerHTML = '<div class="mobile-menu-label">WORKSPACE</div>' + [
+            [
+                'Business',
+                '/business'
+            ],
+            [
+                'Nonprofit',
+                '/nonprofit'
+            ],
+            [
+                'Volunteer',
+                '/volunteer'
+            ],
+            [
+                'Sponsor',
+                '/sponsor'
+            ],
+            [
+                'Create mission',
+                '/nonprofit/create'
+            ],
+            [
+                'Explore resources',
+                '/explore'
+            ],
+            [
+                'Our impact',
+                '/impact'
+            ],
+            [
+                'How it works',
+                '/how-it-works'
+            ]
+        ].map(([label, p])=>`<a href="${p}" data-mobile-nav="${p}" ${path === p ? 'aria-current="page"' : ''}>${label}</a>`).join('');
+        document.querySelector('.main-wrap')?.append(menu);
+    }
+    let backdrop = document.querySelector('.mobile-menu-backdrop');
+    if (!backdrop) {
+        backdrop = document.createElement('button');
+        backdrop.type = 'button';
+        backdrop.className = 'mobile-menu-backdrop';
+        backdrop.setAttribute('aria-label', 'Close mobile navigation');
+        backdrop.hidden = true;
+        document.body.append(backdrop);
+    }
+    if (!document.body.dataset.mobileMenuBound) {
+        document.body.dataset.mobileMenuBound = 'true';
+        const close = ()=>{
+            const m = document.getElementById('mobile-menu'), b = document.querySelector('.mobile-menu-backdrop'), t = document.querySelector('.mobile-menu-toggle');
+            if (m) m.hidden = true;
+            if (b) b.hidden = true;
+            if (t) t.setAttribute('aria-expanded', 'false');
+        };
+        document.addEventListener('click', (e)=>{
+            const target = e.target;
+            if (target.closest('.mobile-menu-toggle')) {
+                const m = document.getElementById('mobile-menu'), b = document.querySelector('.mobile-menu-backdrop'), t = target.closest('.mobile-menu-toggle');
+                const open = Boolean(m?.hidden);
+                if (m) m.hidden = !open;
+                if (b) b.hidden = !open;
+                if (t) t.setAttribute('aria-expanded', String(open));
+                return;
+            }
+            if (target.closest('.mobile-menu-backdrop')) {
+                close();
+                return;
+            }
+            const link = target.closest('[data-mobile-nav]');
+            if (link) {
+                e.preventDefault();
+                close();
+                go(link.dataset.mobileNav || link.getAttribute('href') || '/');
+            }
+        });
+        document.addEventListener('keydown', (e)=>{
+            if (e.key === 'Escape') close();
+        });
+    }
+}
+const mobileMenuObserver = new MutationObserver(()=>ensureMobileMenu());
+mobileMenuObserver.observe(document.getElementById('app'), {
+    childList: true
+});
 render();
+ensureMobileMenu();
