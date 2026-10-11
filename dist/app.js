@@ -1,4 +1,6 @@
-import { seed, compile, match, optimize, fund, completeStop, impact, outstanding, uid, example, money, time, distance, shelter } from './engine.js';
+import { seed, compile, match, optimize, fund, completeStop, impact, outstanding, uid, example, money, time, distance, shelter, normalizeDonationCategory, validateDonation, validateDonationImage, donationResource } from './engine.js';
+import { initializeAuth, login, logout, saveProfile, getProfile } from './auth.js';
+import './auth-bootstrap.js';
 const $ = (s)=>document.querySelector(s);
 const esc = (s)=>String(s ?? '').replace(/[&<>"']/g, (c)=>({
             '&': '&amp;',
@@ -14,6 +16,7 @@ try {
     db = seed();
 }
 let role = db.role || 'Nonprofit', path = location.pathname, scan = [], photo = '', scanned = false, draft = null, filter = 'All resources', busy = false;
+let authReady = false, authUser, authProfile, authError = '';
 let map = null;
 const iconPaths = {
     mesh: 'M5 4h5v5H5z M14 4h5v5h-5z M5 13h5v5H5z M14 13h5v5h-5z M10 6.5h4 M10 15.5h4 M7.5 9v4 M16.5 9v4',
@@ -77,6 +80,26 @@ const current = ()=>{
     return id ? db.missions.find((m)=>m.id === id) : db.missions[db.missions.length - 1];
 };
 const total = (key)=>db.impactRecords.reduce((s, i)=>s + (i[key] || 0), 0);
+function authLoading() {
+    return `<main class="auth-screen"><section class="auth-card"><div class="auth-logo">${I('mesh', 34)} MISSION<span>MESH</span></div><div class="spinner"></div><h1>Connecting your workspace…</h1><p>Restoring your secure Auth0 session.</p></section></main>`;
+}
+function authEntry() {
+    return `<div class="auth-actions"><button class="btn outline" data-auth="login">Log in</button><button class="btn primary" data-auth="signup">Create account</button></div>`;
+}
+function onboarding() {
+    const name = esc(authUser?.name || authUser?.email || 'there');
+    return `<main class="auth-screen"><section class="auth-card onboarding-card"><div class="auth-logo">${I('mesh', 34)} MISSION<span>MESH</span></div><div class="eyebrow">WELCOME TO MISSIONMESH</div><h1>Hi ${name}. How will you help?</h1><p class="auth-lead">Choose the workspace that fits you best. This profile is saved locally for now and will move to Supabase in a future sprint.</p><form id="onboarding-form"><fieldset><legend>Your role</legend><div class="role-choice">${[
+        'Nonprofit',
+        'Business',
+        'Volunteer',
+        'Sponsor'
+    ].map((r, i)=>`<label><input type="radio" name="role" value="${r}" ${i === 0 ? 'checked' : ''}><span><strong>${r}</strong><small>${({
+            Nonprofit: 'Coordinate a community need',
+            Business: 'Share surplus resources',
+            Volunteer: 'Deliver the last mile',
+            Sponsor: 'Close funding gaps'
+        })[r]}</small></span></label>`).join('')}</div></fieldset><label>Organization or display name<input name="displayName" value="${esc(authUser?.name || '')}" required></label><label>City or service area<input name="location" placeholder="Atlanta, GA" required></label><p class="helper">Your selection controls the local navigation only. It does not grant backend permissions.</p><button class="btn primary full">Enter my workspace ${I('arrow')}</button></form><button class="btn text" data-auth="logout">Use a different account</button></section></main>`;
+}
 function title(kicker, heading, description, cta = '') {
     return `<div class="page-heading"><div><div class="eyebrow">${kicker}</div><h1>${heading}</h1><p>${description}</p></div>${cta}</div>`;
 }
@@ -179,7 +202,7 @@ function nonprofit() {
         ].includes(r.category)).slice(0, 3).map(resourceCard).join('')}</div></section><div class="bottom-callout">${I('leaf', 30)}<p>Your community already has more than you think.<br><strong>Let’s put it to work.</strong></p><span>61 local partners. One shared purpose.</span></div>`);
 }
 function resourceCard(r) {
-    return `<article class="resource-card"><span class="resource-icon ${r.category}">${I(r.category === 'meal' ? 'leaf' : r.category === 'transportation' ? 'truck' : r.category === 'drink' ? 'box' : 'people', 28)}</span><div><small>${esc(r.provider)}</small><h3>${esc(r.name)}</h3><p>${r.quantity} ${esc(r.unit)} <span>·</span> ${distance(r, shelter).toFixed(1)} mi away</p><span class="availability">${I('clock', 13)} Until ${time(r.availableUntil)}</span></div><span class="free">FREE</span></article>`;
+    return `<article class="resource-card"><span class="resource-icon ${r.category}">${I(r.category === 'meal' ? 'leaf' : r.category === 'transportation' ? 'truck' : r.category === 'drink' ? 'box' : 'people', 28)}</span><div><small>${esc(r.provider)}</small><h3>${esc(r.name)}</h3><p>${r.quantity} ${esc(r.unit)} <span>·</span> ${r.coordinatesResolved === false ? 'Pickup location pending verification' : `${distance(r, shelter).toFixed(1)} mi away`}</p><span class="availability">${I('clock', 13)} Until ${time(r.availableUntil)}</span></div><span class="free">FREE</span></article>`;
 }
 function business() {
     const own = db.resources.filter((r)=>r.organizationId === 'org-sunrise');
@@ -189,20 +212,20 @@ function business() {
         ].includes(r.status)).length}</span></h2>${badge('Atlanta community', 'mint')}</div><div class="donation-list">${own.filter((r)=>r.status !== 'Delivered').map((r)=>`<article class="donation-row"><span class="resource-icon">${I('box', 30)}</span><div><h3>${esc(r.name)}</h3><p>${r.quantity} ${esc(r.unit)} · ${r.storageType}</p></div><div><small>PICKUP DEADLINE</small><strong>${time(r.availableUntil)}</strong></div><div>${badge(r.status, 'mint')}<p>${r.status === 'Available' ? 'Ready to match' : 'Hope Community Shelter'}</p></div></article>`).join('') || '<div class="empty">Nothing active right now. Have surplus to share?</div>'}</div><section class="section"><div class="section-head"><h2>Previous donations</h2></div><div class="donation-list">${own.filter((r)=>r.status === 'Delivered').map(resourceCard).join('') || `<div class="donation-row"><span class="resource-icon">${I('check')}</span><div><h3>28 prepared lunch portions</h3><p>Delivered to Hope Shelter · Previous demo record</p></div>${badge('Delivered', 'mint')}<strong>$224 put to work</strong></div>`}</div></section>`);
 }
 function quickGive() {
-    return shell(`${title('QUICK GIVE', 'Good food deserves a second chapter.', 'Take a photo of what you have left. We’ll help you turn it into a donation.')}<div class="form-layout"><section class="panel"><div class="step-heading"><span>1</span><div><h2>Show us your surplus</h2><p>Upload an image or use your camera.</p></div>${badge('Vision demo', 'lavender')}</div><label class="upload" for="photo">${photo ? `<img src="${esc(photo)}" alt="Selected surplus image">` : `<span class="upload-icon">${I('camera', 38)}</span><h3>A photo. A fresh possibility.</h3><p>Drag & drop, or choose an image</p><span class="btn outline">Choose image</span><small>JPG, PNG or WebP · up to 5 MB</small>`}<input type="file" id="photo" accept="image/*" capture="environment" hidden></label><div class="actions">${btn('Use sample surplus', 'sample', 'outline')}${photo ? btn(I('spark') + ' Analyze image', 'scan', 'purple') : ''}</div>${scanned ? `<div class="analysis-head"><div>${I('spark')} <strong>AI suggested — please confirm</strong></div>${badge('Gemini-ready · demo fallback', 'lavender')}</div><p class="helper">Seeded suggestions for the sample. Live Gemini is not connected; uploaded images receive editable demo suggestions.</p><div id="scan-items">${scan.map((x, i)=>`<div class="scan-row"><label>Item<input data-item="${i}" data-key="name" value="${esc(x.name)}" required></label><label>Qty<input type="number" min="1" data-item="${i}" data-key="quantity" value="${x.quantity}"></label><label>Unit<input data-item="${i}" data-key="unit" value="${esc(x.unit)}"></label><label>Category<select data-item="${i}" data-key="category">${[
+    return shell(`${title('QUICK GIVE', 'Good food deserves a second chapter.', 'Create an accurate donation listing in a few quick steps.')}<div class="form-layout"><section class="panel"><div class="step-heading"><span>1</span><div><h2>Attach a photo, if useful</h2><p>Photos stay in this browser and are never uploaded.</p></div>${badge('Manual confirmation', 'lavender')}</div><label class="upload" for="photo">${photo ? `<img src="${esc(photo)}" alt="Selected donation photo"><span class="helper">Selected photo preview</span>` : `<span class="upload-icon">${I('camera', 38)}</span><h3>Show your surplus</h3><p>Choose an image or use your phone camera</p><span class="btn outline">Choose image</span><small>JPG, PNG or WebP · up to 5 MB</small>`}<input type="file" id="photo" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><div class="actions">${btn('Use sample photo', 'sample', 'outline')}${btn('Add item manually', 'add-item', 'outline')}${photo ? btn('Remove photo', 'remove-photo', 'text') : ''}${!scan.length ? btn('Load editable examples', 'example-items', 'text') : ''}</div><p class="helper">No computer vision is running. Example items are clearly labeled and must be confirmed or replaced by the donor.</p>${scan.length ? `<div class="analysis-head"><div>${I('box')} <strong>Donation items · editable</strong></div>${badge('Donor confirmed', 'mint')}</div><div id="scan-items">${scan.map((x, i)=>`<div class="scan-row"><label>Item<input data-item="${i}" data-key="name" value="${esc(x.name)}" required></label><label>Description<input data-item="${i}" data-key="description" value="${esc(x.description || '')}"></label><label>Qty<input type="number" min="0.01" step="any" data-item="${i}" data-key="quantity" value="${x.quantity}"></label><label>Unit<input data-item="${i}" data-key="unit" value="${esc(x.unit)}" required></label><label>Category<select data-item="${i}" data-key="category">${[
             'meal',
             'drink',
             'supplies',
             'space',
             'transportation'
-        ].map((c)=>`<option ${x.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label><button class="remove" data-remove="${i}" aria-label="Remove ${esc(x.name)}">×</button></div>`).join('')}</div>${btn(I('plus', 16) + ' Add item', 'add-item', 'text')}` : ''}</section><section class="panel"><div class="step-heading"><span>2</span><div><h2>Confirm the details</h2><p>You know your food best.</p></div></div><form id="donation-form"><label>Available until<input name="until" type="time" value="18:00" required></label><label>Pickup address<input name="address" value="675 Ponce de Leon Ave NE, Atlanta, GA" required></label><label>Storage requirement<select name="storage"><option>Refrigerated</option><option>Room temperature</option><option>Frozen</option></select></label><fieldset><legend>Dietary information · confirm what applies</legend><div class="checks">${[
+        ].map((c)=>`<option ${normalizeDonationCategory(x.category) === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label><button class="remove" data-remove="${i}" aria-label="Remove ${esc(x.name || 'item')}">×</button></div>`).join('')}</div>${btn(I('plus', 16) + ' Add another item', 'add-item', 'text')}` : ''}</section><section class="panel"><div class="step-heading"><span>2</span><div><h2>Confirm donation details</h2><p>These details control matching and pickup safety.</p></div></div><form id="donation-form"><div class="field-grid"><label>Business name<input name="business" value="Sunrise Restaurant" required></label><label>Donation title<input name="title" placeholder="Prepared meals for the community" required></label><label>Pickup available from<input name="from" type="time" value="16:00" required></label><label>Pickup available until<input name="until" type="time" value="18:00" required></label><label>Use-by or expiration date<input name="useBy" type="date"></label><label>Pickup address<input name="address" value="675 Ponce de Leon Ave NE, Atlanta, GA" required></label></div><label>Storage requirement<select name="storage"><option>Refrigerated</option><option>Room temperature</option><option>Frozen</option></select></label><fieldset><legend>Dietary information · confirm what applies</legend><div class="checks">${[
         'Vegetarian',
         'Vegan',
         'Halal',
         'Gluten Free',
         'Contains Nuts',
         'Other'
-    ].map((x)=>`<label><input type="checkbox" name="diet" value="${x}"> ${x}</label>`).join('')}</div></fieldset><label>Allergens & handling notes<textarea name="notes" placeholder="Ingredients, known allergens, packaging, pickup instructions…" required></textarea></label><label class="check-confirm"><input type="checkbox" name="confirm" required> <span>I confirm quantity, allergens, storage, pickup deadline, and that this food has been stored and handled appropriately.</span></label><div class="safety">${I('heart', 18)}<p>AI identifies items and estimates quantity. The donor is responsible for confirming quantity, allergens, storage conditions, and food safety. MissionMesh does not determine whether food is safe to consume.</p></div><button class="btn primary full" ${!scanned ? 'disabled' : ''}>Confirm & Post Donation ${I('arrow')}</button></form></section></div>`);
+    ].map((x)=>`<label><input type="checkbox" name="diet" value="${x}"> ${x}</label>`).join('')}</div></fieldset><label>Known allergens<textarea name="allergens" placeholder="List known allergens; do not leave unknown facts to image recognition." required></textarea></label><label>Pickup instructions<textarea name="instructions" placeholder="Packaging, loading instructions, contact details…" required></textarea></label><label class="check-confirm"><input type="checkbox" name="confirm" required> <span>I confirm the item names, quantities, allergens, storage, pickup window, and use-by information.</span></label><div class="safety">${I('heart', 18)}<p>MissionMesh does not infer food safety or allergens from photos. The donor is responsible for every confirmation above.</p></div><button class="btn primary full" ${!scan.length ? 'disabled' : ''}>Confirm & Post Donation ${I('arrow')}</button></form></section></div>`);
 }
 function createMission() {
     return shell(`${title('AI MISSION COMPILER', 'Start with what you want to make possible.', 'Your community may already have what it takes. Tell us the outcome.')}<div class="create-layout"><section class="panel mission-input"><div class="ai-header">${I('spark', 26)}<h2>What outcome are you trying to accomplish?</h2></div><form id="mission-form"><label class="sr-only" for="goal">Mission outcome</label><textarea id="goal" name="goal" rows="5" placeholder="${example}" required>${example}</textarea><div class="examples"><small>TRY A GOAL</small>${btn('Dinner for 100', 'example-food', 'chip')}${btn('School supplies for 40', 'example-supply', 'chip')}</div><div class="field-grid"><label>Mission location<input name="address" value="${shelter.address}" required></label><label>Maximum budget ($)<input name="budget" type="number" min="0" placeholder="From your goal"></label><label>Deadline<input name="deadline" type="time"></label></div><button class="btn purple full">${I('spark')} Build My Mission ${I('arrow')}</button><p class="helper center">Demo compiler extracts quantities, budget, deadline, and storage. You approve the plan.</p></form></section><aside class="mission-aside"><span class="eyebrow">FROM OUTCOME TO ACTION</span><h2>One goal.<br>Many possibilities.</h2>${[
@@ -700,16 +723,62 @@ function bind() {
 }
 function readPhoto(file) {
     if (!file) return;
-    if (!file.type.startsWith('image/')) return toast('Choose an image file.');
-    if (file.size > 5 * 1024 * 1024) return toast('Choose an image smaller than 5 MB.');
+    const imageError = validateDonationImage(file.type, file.size);
+    if (imageError) return toast(imageError);
     const reader = new FileReader();
     reader.onload = ()=>{
         photo = String(reader.result);
-        scanned = false;
         render();
-        action('scan');
     };
+    reader.onerror = ()=>toast('The image could not be previewed. Please try another file.');
     reader.readAsDataURL(file);
+}
+function installDonationHandler() {
+    if (document.body.dataset.donationHandler) return;
+    document.body.dataset.donationHandler = 'true';
+    document.addEventListener('submit', (event)=>{
+        const form = event.target.closest('#donation-form');
+        if (!form) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const f = new FormData(form), items = scan.map((x)=>({
+                ...x,
+                category: normalizeDonationCategory(x.category)
+            }));
+        const from = String(f.get('from')), until = String(f.get('until'));
+        const fromParts = from.split(':').map(Number), untilParts = until.split(':').map(Number);
+        const data = {
+            businessName: String(f.get('business')).trim(),
+            donationTitle: String(f.get('title')).trim(),
+            address: String(f.get('address')).trim(),
+            from,
+            until,
+            fromMinutes: fromParts[0] * 60 + fromParts[1],
+            untilMinutes: untilParts[0] * 60 + untilParts[1],
+            storage: String(f.get('storage')),
+            dietaryTags: f.getAll('diet').map(String),
+            allergens: String(f.get('allergens')).trim(),
+            instructions: String(f.get('instructions')).trim(),
+            useBy: String(f.get('useBy') || ''),
+            items,
+            imageUrl: photo || undefined,
+            organizationId: String(f.get('business')).trim().toLowerCase() === 'sunrise restaurant' ? 'org-sunrise' : `org-${String(f.get('business')).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+        };
+        const errors = validateDonation(data);
+        if (errors.length) return toast(errors[0]);
+        const resources = items.map((item)=>donationResource(data, item));
+        db.resources.push(...resources);
+        if (!db.organizations.some((o)=>o.id === data.organizationId)) db.organizations.push({
+            id: data.organizationId,
+            name: data.businessName
+        });
+        save();
+        photo = '';
+        scan = [];
+        scanned = false;
+        go('/business');
+        toast(`${resources.length} donation item${resources.length === 1 ? '' : 's'} posted and available for matching.`);
+    }, true);
 }
 function action(x) {
     if (x === 'run-demo' || x === 'reset') {
@@ -727,36 +796,37 @@ function action(x) {
     } else if (x === 'sample') {
         photo = '/sample.svg';
         render();
-        action('scan');
+    } else if (x === 'example-items') {
+        scan = [
+            {
+                name: 'Boxed meals',
+                description: 'Prepared meal portions',
+                quantity: 40,
+                unit: 'meals',
+                category: 'meal'
+            },
+            {
+                name: 'Bananas',
+                description: 'Fresh bananas',
+                quantity: 30,
+                unit: 'pieces',
+                category: 'meal'
+            },
+            {
+                name: 'Bottled drinks',
+                description: 'Sealed bottled drinks',
+                quantity: 24,
+                unit: 'bottles',
+                category: 'drink'
+            }
+        ];
+        scanned = true;
+        render();
     } else if (x === 'scan') {
-        processing([
-            'AI is identifying your surplus…',
-            'Estimating quantities conservatively…',
-            'Preparing suggestions for your review…'
-        ], ()=>{
-            scan = [
-                {
-                    name: 'Boxed meals',
-                    quantity: 40,
-                    unit: 'meals',
-                    category: 'meal'
-                },
-                {
-                    name: 'Bananas',
-                    quantity: 30,
-                    unit: 'pieces',
-                    category: 'meal'
-                },
-                {
-                    name: 'Bottled drinks',
-                    quantity: 24,
-                    unit: 'bottles',
-                    category: 'drink'
-                }
-            ];
-            scanned = true;
-            render();
-        });
+        toast('Image recognition is not enabled. Add or review donation items manually.');
+    } else if (x === 'remove-photo') {
+        photo = '';
+        render();
     } else if (x === 'edit-mission') {
         if (current().contributions.length) return;
         draft = JSON.parse(JSON.stringify(current()));
@@ -968,9 +1038,240 @@ function ensureMobileMenu() {
         });
     }
 }
+async function aiRequest(endpoint, payload) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(()=>({}));
+    if (!response.ok) {
+        const code = data.error?.code;
+        throw new Error(code ? `${code}: ${data.error.message}` : data.error?.message || 'Gemini is unavailable.');
+    }
+    return data;
+}
+function aiText(parent, label, value) {
+    const row = document.createElement('div');
+    row.className = 'ai-result-row';
+    const strong = document.createElement('strong');
+    strong.textContent = label;
+    const span = document.createElement('span');
+    span.textContent = String(value ?? 'Not provided');
+    row.append(strong, span);
+    parent.append(row);
+}
+function showAiError(parent, error) {
+    parent.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'ai-error';
+    p.textContent = error instanceof Error ? error.message : 'Gemini is unavailable. Your mission text is still preserved.';
+    parent.append(p);
+    const fallback = document.createElement('button');
+    fallback.className = 'btn outline';
+    fallback.type = 'button';
+    fallback.textContent = 'Use rule-based parser';
+    fallback.onclick = ()=>{
+        document.querySelector('#mission-form')?.requestSubmit();
+    };
+    parent.append(fallback);
+}
+function showAnalysis(analysis) {
+    const panel = document.createElement('section');
+    panel.className = 'panel ai-result';
+    panel.id = 'gemini-result';
+    const heading = document.createElement('div');
+    heading.className = 'section-head';
+    heading.innerHTML = '<div><span class="eyebrow">GEMINI ANALYSIS</span><h2>Review the extracted mission</h2></div><span class="badge lavender">AI · editable</span>';
+    panel.append(heading);
+    aiText(panel, 'Objective', analysis.objective);
+    aiText(panel, 'People served', analysis.peopleServed ?? 'Not specified');
+    aiText(panel, 'Location', analysis.location || 'Not specified; no coordinates invented');
+    aiText(panel, 'Deadline', analysis.deadlineText || 'Not specified');
+    aiText(panel, 'Budget', analysis.budget === null || analysis.budget === undefined ? 'Not specified' : money(analysis.budget));
+    const notice = document.createElement('p');
+    notice.className = 'helper';
+    notice.textContent = [
+        ...analysis.missingDetails || [],
+        ...analysis.ambiguities || []
+    ].join(' ') || 'Review every editable field below before creating the mission.';
+    panel.append(notice);
+    document.querySelector('.create-layout')?.after(panel);
+    panel.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+    });
+}
+function deadlineFromText(text) {
+    const found = text?.match(/(?:at|by)?\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+    if (!found) return undefined;
+    const h = Number(found[1]) % 12 + (found[3]?.toLowerCase() === 'pm' ? 12 : 0);
+    return `${String(h).padStart(2, '0')}:${found[2] || '00'}`;
+}
+function setupAiCreate() {
+    const form = document.querySelector('#mission-form');
+    if (!form || document.querySelector('#gemini-tools')) return;
+    const tools = document.createElement('div');
+    tools.id = 'gemini-tools';
+    tools.className = 'ai-tools';
+    tools.innerHTML = '<span class="eyebrow">OPTIONAL AI ASSISTANCE</span><p>Gemini extracts requirements from your description. Nothing is saved until you review and submit the editable fields.</p><button type="button" class="btn purple">Analyze with Gemini</button><div class="ai-status" aria-live="polite"></div>';
+    form.after(tools);
+    const button = tools.querySelector('button'), status = tools.querySelector('.ai-status');
+    button.onclick = async ()=>{
+        const text = form.querySelector('[name=goal]').value.trim();
+        if (text.length < 10) {
+            status.textContent = 'Describe the mission in at least 10 characters.';
+            return;
+        }
+        button.disabled = true;
+        status.textContent = 'Contacting Gemini…';
+        try {
+            const data = await aiRequest('/api/ai/mission/analyze', {
+                description: text,
+                context: {
+                    address: form.querySelector('[name=address]').value
+                }
+            });
+            const a = data.analysis;
+            const extra = {
+                address: a.location || String(form.querySelector('[name=address]').value),
+                budget: a.budget ?? String(form.querySelector('[name=budget]').value),
+                deadline: deadlineFromText(a.deadlineText || '')
+            };
+            draft = compile(text, extra);
+            if (a.objective) draft.title = a.objective.slice(0, 120);
+            if (a.peopleServed) draft.people = a.peopleServed;
+            if (Array.isArray(a.requirements) && a.requirements.length) draft.requirements = a.requirements.map((r)=>({
+                    category: r.category,
+                    quantity: Number(r.quantity),
+                    unit: r.unit,
+                    priority: r.priority
+                }));
+            draft.dietaryTags = Array.isArray(a.dietaryTags) ? a.dietaryTags : [];
+            draft.refrigeration = Boolean(a.refrigerationRequired);
+            if (a.transportationRequired && !draft.requirements.some((r)=>r.category === 'transportation')) draft.requirements.push({
+                category: 'transportation',
+                quantity: 1,
+                unit: 'vehicle',
+                priority: 'required'
+            });
+            render();
+            showAnalysis(a);
+            document.querySelector('#requirements')?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        } catch (error) {
+            status.textContent = 'Gemini could not analyze this mission.';
+            showAiError(status, error);
+        } finally{
+            button.disabled = false;
+        }
+    };
+}
+function setupAiPlan() {
+    const m = current();
+    const panel = document.querySelector('.cost-panel');
+    if (!m || !panel || document.querySelector('#ai-plan-tools')) return;
+    const wrap = document.createElement('section');
+    wrap.id = 'ai-plan-tools';
+    wrap.className = 'ai-tools';
+    wrap.innerHTML = '<span class="eyebrow">MISSION INTELLIGENCE</span><p>Gemini explains the deterministic matches and highlights readiness risks. It cannot change resources, funding, or route state.</p><button type="button" class="btn purple">Analyze readiness with Gemini</button><label>Refine this mission naturally<textarea rows="3" placeholder="Example: change vegetarian meals to 60"></textarea></label><button type="button" class="btn outline">Propose refinement</button><div class="ai-status" aria-live="polite"></div>';
+    panel.append(wrap);
+    const status = wrap.querySelector('.ai-status');
+    const result = (title)=>{
+        const el = document.createElement('section');
+        el.className = 'ai-output';
+        const h = document.createElement('h3');
+        h.textContent = title;
+        el.append(h);
+        wrap.append(el);
+        return el;
+    };
+    wrap.querySelectorAll('button')[0].onclick = async ()=>{
+        status.textContent = 'Reviewing the current deterministic plan…';
+        try {
+            const shortages = m.requirements.map((r)=>({
+                    ...r,
+                    missing: Math.max(0, r.quantity - m.matches.filter((x)=>x.category === r.category).reduce((s, x)=>s + x.fulfilledQuantity, 0))
+                })).filter((r)=>r.missing > 0);
+            const data = await aiRequest('/api/ai/mission/explain', {
+                mission: m,
+                matches: m.matches,
+                shortages,
+                volunteer: db.volunteers[0]
+            });
+            const out = result('Gemini explanation and readiness');
+            for (const x of data.explanation.matchExplanations || [])aiText(out, 'Resource ' + x.resourceId, x.explanation);
+            for (const x of data.explanation.risks || [])aiText(out, x.severity, x.issue + ' Next: ' + x.nextAction);
+            for (const x of data.explanation.shortages || [])aiText(out, 'Shortage: ' + x.category, x.explanation + ' Next: ' + x.nextAction);
+            status.textContent = 'AI explanation complete. Deterministic matching remains the source of truth.';
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : 'Gemini is unavailable.';
+        }
+    };
+    wrap.querySelectorAll('button')[1].onclick = async ()=>{
+        const instruction = wrap.querySelector('textarea').value.trim();
+        if (!instruction) {
+            status.textContent = 'Describe the change you want first.';
+            return;
+        }
+        status.textContent = 'Preparing an editable proposal…';
+        try {
+            const data = await aiRequest('/api/ai/mission/refine', {
+                mission: m,
+                instruction
+            });
+            const out = result('Proposed changes · human confirmation required');
+            for (const x of data.changes || [])aiText(out, x.field, String(x.oldValue) + ' → ' + String(x.newValue) + ' · ' + x.reason);
+            const confirm1 = document.createElement('button');
+            confirm1.className = 'btn primary';
+            confirm1.type = 'button';
+            confirm1.textContent = 'Confirm and save refinement';
+            confirm1.onclick = ()=>{
+                const p = data.proposedMission;
+                Object.assign(m, {
+                    title: p.title,
+                    description: p.description,
+                    people: Number(p.people),
+                    address: p.address,
+                    deadline: Number(p.deadline),
+                    budget: Number(p.budget),
+                    refrigeration: Boolean(p.refrigeration),
+                    dietaryTags: p.dietaryTags,
+                    requirements: p.requirements,
+                    matches: [],
+                    route: [],
+                    status: 'Draft'
+                });
+                match(m, db.resources, db.volunteers[0]);
+                save();
+                go(`/mission/${m.id}/plan`);
+                toast('Refinement saved after your confirmation.');
+            };
+            out.append(confirm1);
+            status.textContent = 'Review the proposal. Nothing changed yet.';
+        } catch (error) {
+            status.textContent = error instanceof Error ? error.message : 'Gemini is unavailable.';
+        }
+    };
+}
+function setupAiEnhancements() {
+    if (path === '/nonprofit/create') setupAiCreate();
+    if (/^\/mission\/[^/]+\/plan$/.test(path)) setupAiPlan();
+}
+const aiObserver = new MutationObserver(()=>setupAiEnhancements());
+aiObserver.observe(document.getElementById('app'), {
+    childList: true,
+    subtree: true
+});
 const mobileMenuObserver = new MutationObserver(()=>ensureMobileMenu());
 mobileMenuObserver.observe(document.getElementById('app'), {
     childList: true
 });
+installDonationHandler();
 render();
 ensureMobileMenu();
+setupAiEnhancements();

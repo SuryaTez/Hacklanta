@@ -42,6 +42,97 @@ const knownCoordinates = {
         -84.36
     ]
 };
+export function resolveKnownCoordinates(address) {
+    const point = knownCoordinates[address.trim()];
+    return point ? {
+        lat: point[0],
+        lng: point[1],
+        coordinatesResolved: true
+    } : {
+        lat: 0,
+        lng: 0,
+        coordinatesResolved: false
+    };
+}
+export function normalizeDonationCategory(category) {
+    const value = String(category || '').trim().toLowerCase();
+    return ({
+        food: 'meal',
+        meals: 'meal',
+        meal: 'meal',
+        water: 'drink',
+        drinks: 'drink',
+        drink: 'drink',
+        goods: 'supplies',
+        supply: 'supplies',
+        supplies: 'supplies',
+        space: 'space',
+        transport: 'transportation',
+        transportation: 'transportation'
+    })[value] || value;
+}
+export function validateDonationImage(type, size) {
+    if (![
+        'image/jpeg',
+        'image/png',
+        'image/webp'
+    ].includes(String(type || '').toLowerCase())) return 'Choose a JPG, PNG, or WebP image.';
+    if (!Number.isFinite(size) || size > 5 * 1024 * 1024) return 'Choose an image smaller than 5 MB.';
+    return '';
+}
+export function validateDonation(d) {
+    const errors = [];
+    if (!String(d.businessName || '').trim()) errors.push('Business name is required.');
+    if (!String(d.address || '').trim()) errors.push('Pickup address is required.');
+    if (!String(d.until || '').trim()) errors.push('Pickup availability is required.');
+    if (!Array.isArray(d.items) || !d.items.length) errors.push('Add at least one donation item.');
+    for (const item of d.items || []){
+        if (!String(item.name || '').trim()) errors.push('Every item needs a name.');
+        if (!Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0) errors.push('Every item needs a quantity greater than zero.');
+        if (!String(item.unit || '').trim()) errors.push('Every item needs a unit.');
+        if (![
+            'meal',
+            'drink',
+            'supplies',
+            'space',
+            'transportation'
+        ].includes(normalizeDonationCategory(item.category))) errors.push('Choose a supported resource category.');
+    }
+    const from = String(d.from || '').split(':').map(Number), until = String(d.until || '').split(':').map(Number);
+    if (from.length === 2 && until.length === 2 && until[0] * 60 + until[1] <= from[0] * 60 + from[1]) errors.push('Pickup availability must end after it starts.');
+    return [
+        ...new Set(errors)
+    ];
+}
+export function donationResource(d, item, id = uid()) {
+    const category = normalizeDonationCategory(item.category), point = resolveKnownCoordinates(String(d.address || ''));
+    return {
+        id,
+        organizationId: String(d.organizationId || 'org-sunrise'),
+        provider: String(d.businessName).trim(),
+        name: String(item.name).trim(),
+        category,
+        quantity: Number(item.quantity),
+        unit: String(item.unit).trim(),
+        estimatedValue: Number(item.quantity) * (category === 'meal' ? 8 : category === 'drink' ? 1.5 : 2),
+        lat: point.lat,
+        lng: point.lng,
+        coordinatesResolved: point.coordinatesResolved,
+        address: String(d.address).trim(),
+        availableFrom: Number(d.fromMinutes),
+        availableUntil: Number(d.untilMinutes),
+        storageType: String(d.storage || 'Room temperature'),
+        dietaryTags: Array.isArray(d.dietaryTags) ? d.dietaryTags : [],
+        status: 'Available',
+        description: String(item.description || '').trim(),
+        donationTitle: String(d.donationTitle || '').trim(),
+        allergens: String(d.allergens || '').trim(),
+        handlingNotes: String(d.instructions || '').trim(),
+        useBy: String(d.useBy || '').trim(),
+        imageUrl: d.imageUrl || undefined,
+        demo: Boolean(d.demo)
+    };
+}
 const base = {
     availableFrom: 960,
     availableUntil: 1110,
@@ -351,10 +442,13 @@ export function match(m, resources, volunteer) {
     let missing = [];
     for (const req of m.requirements){
         let remaining = req.quantity;
-        const candidates = resources.filter((r)=>(r.category === req.category || req.category === 'meal' && r.category === 'side') && (!r.missionId || r.missionId === m.id) && [
+        const candidates = resources.filter((r)=>(r.category === req.category || req.category === 'meal' && r.category === 'side') && r.coordinatesResolved !== false && (!r.missionId || r.missionId === m.id) && [
                 'Available',
                 'Matched'
-            ].includes(r.status) && r.availableFrom < m.deadline && r.availableUntil >= Math.max(975, r.availableFrom) + 15 && (r.storageType === 'Room temperature' || m.refrigeration && r.storageType === 'Refrigerated') && m.dietaryTags.every((t)=>r.dietaryTags.includes(t)));
+            ].includes(r.status) && r.availableFrom < m.deadline && r.availableUntil >= Math.max(975, r.availableFrom) + 15 && (r.storageType === 'Room temperature' || m.refrigeration && [
+                'Refrigerated',
+                'Frozen'
+            ].includes(r.storageType)) && m.dietaryTags.every((t)=>r.dietaryTags.includes(t)));
         candidates.sort((a, b)=>score(b, req, m) - score(a, req, m));
         for (const r of candidates){
             if (remaining <= 0) break;
