@@ -4,5 +4,7 @@ node_modules/
 .env.*
 !.env.example
 __pycache__/
+.freebuff/chrome-audit/
+review-output/
 *.tar.gz
 .DS_Store

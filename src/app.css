@@ -1,0 +1,40 @@
+/*
+ * MissionMesh stylesheet entry.
+ *
+ * Load order matters. Legacy component CSS is kept intact but moved into a
+ * lower cascade layer so the new design system and Tailwind utilities can
+ * refine it without !important or selector inflation.
+ */
+@layer theme, legacy, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@import "./style.css" layer(legacy);
+@import "./design.css" layer(components);
+
+@source "./*.{ts,html}";
+
+@theme {
+  --color-deep: #0d302e;
+  --color-deep-soft: #173f3b;
+  --color-forest: #198567;
+  --color-forest-dark: #126a52;
+  --color-mint: #c7ebd8;
+  --color-mint-soft: #e8f5ee;
+  --color-warm: #f8f9f5;
+  --color-sage: #e2eae5;
+  --color-ink: #142b28;
+  --color-muted: #5f716b;
+  --color-line: #dbe5df;
+  --color-amber: #8a5a1f;
+  --color-amber-soft: #f6efe2;
+
+  --font-display: "Plus Jakarta Sans", "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --radius-card: 0.875rem;
+  --radius-control: 0.625rem;
+  --shadow-card: 0 1px 2px rgb(13 48 46 / 0.04), 0 12px 30px rgb(13 48 46 / 0.05);
+  --shadow-lift: 0 2px 4px rgb(13 48 46 / 0.05), 0 18px 44px rgb(13 48 46 / 0.08);
+}

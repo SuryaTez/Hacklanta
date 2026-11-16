@@ -43,16 +43,32 @@ const knownCoordinates = {
     ]
 };
 export function resolveKnownCoordinates(address) {
-    const point = knownCoordinates[address.trim()];
+    const point = knownCoordinates[String(address || '').trim()];
     return point ? {
         lat: point[0],
         lng: point[1],
-        coordinatesResolved: true
+        coordinatesResolved: true,
+        locationSource: 'demo-address'
     } : {
-        lat: 0,
-        lng: 0,
-        coordinatesResolved: false
+        lat: undefined,
+        lng: undefined,
+        coordinatesResolved: false,
+        locationSource: 'unverified'
     };
+}
+export function hasVerifiedCoordinates(loc) {
+    const lat = Number(loc?.lat), lng = Number(loc?.lng);
+    return loc?.coordinatesResolved !== false && Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+}
+export function googleMapsUrl(loc) {
+    if (hasVerifiedCoordinates(loc)) return `https://www.google.com/maps/search/?api=1&query=${Number(loc.lat).toFixed(6)},${Number(loc.lng).toFixed(6)}`;
+    const address = String(loc?.address || '').trim();
+    return address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : '';
+}
+export function googleDirectionsUrl(loc) {
+    if (hasVerifiedCoordinates(loc)) return `https://www.google.com/maps/dir/?api=1&destination=${Number(loc.lat).toFixed(6)},${Number(loc.lng).toFixed(6)}`;
+    const address = String(loc?.address || '').trim();
+    return address ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}` : '';
 }
 export function normalizeDonationCategory(category) {
     const value = String(category || '').trim().toLowerCase();
@@ -118,6 +134,7 @@ export function donationResource(d, item, id = uid()) {
         lat: point.lat,
         lng: point.lng,
         coordinatesResolved: point.coordinatesResolved,
+        locationSource: point.locationSource,
         address: String(d.address).trim(),
         availableFrom: Number(d.fromMinutes),
         availableUntil: Number(d.untilMinutes),
@@ -138,8 +155,221 @@ const base = {
     availableUntil: 1110,
     storageType: 'Room temperature',
     dietaryTags: [],
-    status: 'Available'
+    status: 'Available',
+    coordinatesResolved: true,
+    locationSource: 'demo-record'
 };
+export function classifyNeed(text) {
+    const value = String(text || '');
+    const blocked = [
+        [
+            /medicat|medicine|prescription|insulin|pharmac/i,
+            'medication',
+            'items'
+        ],
+        [
+            /wheelchair|crutch|oxygen tank|medical equipment/i,
+            'medical equipment',
+            'items'
+        ],
+        [
+            /furniture|mattress|\bbeds?\b|sofa|couch/i,
+            'furniture',
+            'items'
+        ]
+    ];
+    for (const [re, label, unit] of blocked)if (re.test(value)) return {
+        category: 'unsupported',
+        label,
+        unit,
+        kind: 'unsupported'
+    };
+    if (/hygiene|toothbrush|toothpaste|soap|shampoo|deodorant|sanitary|diaper/i.test(value)) return {
+        category: 'supplies',
+        label: 'hygiene kits',
+        unit: 'kits',
+        kind: 'hygiene'
+    };
+    if (/clothing|clothes|coat|jacket|blanket|sock|shoe|sweater/i.test(value)) return {
+        category: 'supplies',
+        label: 'clothing & blanket bundles',
+        unit: 'bundles',
+        kind: 'clothing'
+    };
+    if (/school|student|classroom|backpack|notebook|pencil|crayon|laptop|supplies|kits/i.test(value)) return {
+        category: 'supplies',
+        label: 'school-supply kits',
+        unit: 'kits',
+        kind: 'school'
+    };
+    return {
+        category: 'meal',
+        label: 'meals',
+        unit: 'servings',
+        kind: 'food'
+    };
+}
+export function missionContext(m) {
+    const r = m.requirements.find((x)=>x.category !== 'transportation' && x.category !== 'space') || m.requirements[0];
+    return {
+        food: r?.category === 'meal',
+        label: r?.label || r?.category || 'resources',
+        unit: r?.unit || 'units',
+        unsupported: r?.category === 'unsupported'
+    };
+}
+export function eligibility(r, req, m) {
+    if (!(r.category === req.category || req.category === 'meal' && r.category === 'side')) return {
+        ok: false,
+        code: 'category_mismatch',
+        detail: `This resource is ${r.category}, but the mission needs ${req.label || req.category}.`
+    };
+    if (r.coordinatesResolved === false) return {
+        ok: false,
+        code: 'location_unverified',
+        detail: 'The pickup address could not be verified, so it cannot be routed or scheduled.'
+    };
+    if (r.missionId && r.missionId !== m.id) return {
+        ok: false,
+        code: 'reserved_elsewhere',
+        detail: 'Already reserved by another mission, so it cannot be matched again.'
+    };
+    if (![
+        'Available',
+        'Matched'
+    ].includes(r.status)) return {
+        ok: false,
+        code: 'unavailable_status',
+        detail: `Its current status is ${r.status}, so it is not available for a new match.`
+    };
+    if (r.availableUntil < 975) return {
+        ok: false,
+        code: 'expired',
+        detail: `Its pickup window ended at ${time(r.availableUntil)}, before pickups can begin.`
+    };
+    if (r.availableFrom >= m.deadline) return {
+        ok: false,
+        code: 'pickup_window_conflict',
+        detail: `Pickup starts at ${time(r.availableFrom)}, at or after the ${time(m.deadline)} mission deadline.`
+    };
+    if (r.availableUntil < Math.max(975, r.availableFrom) + 15) return {
+        ok: false,
+        code: 'pickup_window_conflict',
+        detail: `Its pickup window (${time(r.availableFrom)}–${time(r.availableUntil)}) is too short to schedule a stop.`
+    };
+    if (!(r.storageType === 'Room temperature' || m.refrigeration && [
+        'Refrigerated',
+        'Frozen'
+    ].includes(r.storageType))) return {
+        ok: false,
+        code: 'storage_mismatch',
+        detail: `It needs ${r.storageType.toLowerCase()} storage, and the delivery site has no refrigeration.`
+    };
+    const missingDiet = m.dietaryTags.filter((t)=>!r.dietaryTags.includes(t));
+    if (missingDiet.length) return {
+        ok: false,
+        code: 'dietary_mismatch',
+        detail: `It does not meet the mission’s dietary requirements: ${missingDiet.join(', ')}.`
+    };
+    return {
+        ok: true,
+        code: 'eligible',
+        detail: ''
+    };
+}
+function describeMatch(m, r, req, actual) {
+    const q = Math.round(actual * 100) / 100;
+    const parts = [
+        `Fulfills ${q} of the ${req.quantity} required ${req.label || req.category}.`
+    ];
+    parts.push(`Pickup is available ${time(r.availableFrom)}–${time(r.availableUntil)}; the mission deadline is ${time(m.deadline)}.`);
+    parts.push(r.storageType === 'Room temperature' ? 'Room-temperature storage is compatible with the delivery site.' : `${r.storageType} storage is compatible because the delivery site has refrigeration.`);
+    if (m.dietaryTags.length) parts.push(`It meets the dietary requirement${m.dietaryTags.length > 1 ? 's' : ''}: ${m.dietaryTags.join(', ')}.`);
+    return parts.join(' ');
+}
+function describeReasons(m, r, req, actual) {
+    const q = Math.round(actual * 100) / 100;
+    return [
+        `Requirement: ${req.quantity} ${req.unit} ${req.label || req.category}`,
+        `Fulfills: ${q} ${req.unit}`,
+        `Pickup window: ${time(r.availableFrom)}–${time(r.availableUntil)}`,
+        `Storage: ${r.storageType}`,
+        ...m.dietaryTags.length ? [
+            `Dietary: ${m.dietaryTags.join(', ')}`
+        ] : [],
+        'Pickup location verified'
+    ];
+}
+export function coverage(m) {
+    return m.requirements.map((r)=>{
+        const required = Number(r.quantity) || 0;
+        const matched = Math.round(m.matches.filter((x)=>x.category === r.category).reduce((s, x)=>s + Number(x.fulfilledQuantity || 0), 0) * 100) / 100;
+        const remaining = Math.max(0, Math.round((required - matched) * 100) / 100);
+        const status = r.category === 'unsupported' ? 'needs_confirmation' : remaining <= 0 ? 'covered' : matched > 0 ? 'partial' : 'missing';
+        return {
+            category: r.category,
+            label: r.label || r.category,
+            unit: r.unit,
+            priority: r.priority,
+            required,
+            matched,
+            remaining,
+            status,
+            humanConfirmation: r.category === 'unsupported'
+        };
+    });
+}
+export function rejections(m, resources) {
+    const rows = coverage(m);
+    const matched = new Set(m.matches.map((x)=>x.resourceId));
+    const out = [];
+    for (const req of m.requirements){
+        const row = rows.find((x)=>x.category === req.category);
+        const candidates = resources.filter((r)=>r.category === req.category || req.category === 'meal' && r.category === 'side');
+        for (const r of candidates){
+            if (matched.has(r.id)) continue;
+            const e = eligibility(r, req, m);
+            if (e.ok) {
+                if ((row?.remaining || 0) <= 0) out.push({
+                    resourceId: r.id,
+                    name: r.name,
+                    provider: r.provider,
+                    requirementCategory: req.category,
+                    reasonCode: 'not_needed',
+                    explanation: `Not needed — the ${req.label || req.category} requirement is already covered by higher-fit donations.`
+                });
+                else out.push({
+                    resourceId: r.id,
+                    name: r.name,
+                    provider: r.provider,
+                    requirementCategory: req.category,
+                    reasonCode: 'route_conflict',
+                    explanation: `Eligible on category and availability, but the route could not schedule this pickup before the ${time(m.deadline)} deadline.`
+                });
+            } else out.push({
+                resourceId: r.id,
+                name: r.name,
+                provider: r.provider,
+                requirementCategory: req.category,
+                reasonCode: e.code,
+                explanation: e.detail
+            });
+        }
+    }
+    const wanted = new Set(m.requirements.map((r)=>r.category));
+    for (const r of resources){
+        if (matched.has(r.id) || wanted.has(r.category) || r.category === 'side' && wanted.has('meal')) continue;
+        out.push({
+            resourceId: r.id,
+            name: r.name,
+            provider: r.provider,
+            requirementCategory: null,
+            reasonCode: 'category_mismatch',
+            explanation: `${r.category[0].toUpperCase() + r.category.slice(1)} does not satisfy any requirement in this mission.`
+        });
+    }
+    return out;
+}
 export function seed() {
     const resources = [
         {
@@ -317,49 +547,62 @@ export function seed() {
     };
 }
 export function compile(text, extra = {}) {
-    const people = Number(text.match(/(\d+)\s*(?:people|persons|students|children|families|meals)/i)?.[1] || 100);
+    const people = Number(text.match(/(\d+)\s+(?:[a-z-]+\s+){0,2}(?:people|persons|students|children|families|meals|kits|servings|bundles|items)/i)?.[1] || 100);
     const cash = Number(text.match(/\$\s*(\d+(?:\.\d+)?)/)?.[1] || 0);
     const t = text.match(/(?:by|at)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
     let deadline = t ? (Number(t[1]) % 12 + (t[3]?.toLowerCase() === 'am' ? 0 : 12)) * 60 + Number(t[2] || 0) : 1140;
-    const category = /school|supplies|kits|laptop/i.test(text) ? 'supplies' : /clothing|coat|hygiene/i.test(text) ? 'supplies' : 'meal';
+    const need = classifyNeed(text);
+    const category = need.category;
+    const address = String(extra.address || shelter.address).trim();
+    const explicit = extra.lat !== undefined && extra.lat !== null && extra.lng !== undefined && extra.lng !== null && Number.isFinite(Number(extra.lat)) && Number.isFinite(Number(extra.lng));
+    const known = knownCoordinates[address];
+    const lat = explicit ? Number(extra.lat) : known?.[0];
+    const lng = explicit ? Number(extra.lng) : known?.[1];
+    const coordinatesResolved = explicit || Boolean(known);
+    const locationSource = explicit ? 'confirmed-pin' : known ? 'demo-address' : 'unverified';
     return {
         id: uid(),
-        title: category === 'meal' ? `Dinner for ${people} People` : `Supplies for ${people} People`,
+        title: need.kind === 'food' ? `Dinner for ${people} People` : `${need.label[0].toUpperCase() + need.label.slice(1)} for ${people} People`,
         description: text,
         people,
         budget: extra.budget !== '' && extra.budget !== undefined ? Number(extra.budget) : cash,
         deadline: extra.deadline ? Number(extra.deadline.split(':')[0]) * 60 + Number(extra.deadline.split(':')[1]) : deadline,
-        address: extra.address || shelter.address,
-        lat: extra.lat ?? knownCoordinates[extra.address || shelter.address]?.[0] ?? shelter.lat,
-        lng: extra.lng ?? knownCoordinates[extra.address || shelter.address]?.[1] ?? shelter.lng,
-        coordinatesResolved: Boolean(extra.lat !== undefined && extra.lng !== undefined || knownCoordinates[extra.address || shelter.address]),
-        refrigeration: !/(?:no|without) refrigeration/i.test(text) && /refrigerat/i.test(text),
-        dietaryTags: [
+        address,
+        lat,
+        lng,
+        coordinatesResolved,
+        locationSource,
+        refrigeration: need.kind === 'food' && !/(?:no|without) refrigeration/i.test(text) && /refrigerat/i.test(text),
+        dietaryTags: need.kind === 'food' ? [
             'Vegan',
             'Vegetarian',
             'Halal',
             'Gluten Free'
-        ].filter((x)=>text.toLowerCase().includes(x.toLowerCase())),
+        ].filter((x)=>text.toLowerCase().includes(x.toLowerCase())) : [],
+        clarification: /(\d+)\s+(?:[a-z-]+\s+){0,2}(?:people|persons|students|children|families|meals|kits|servings|bundles|items)/i.test(text) ? '' : 'No quantity was found in the description, so we drafted 100 people. Confirm the count before matching.',
         requirements: [
             {
                 category,
                 quantity: people,
-                unit: category === 'meal' ? 'servings' : 'kits',
-                priority: 'required'
+                unit: need.unit,
+                priority: 'required',
+                label: need.label
             },
-            ...category === 'meal' ? [
+            ...need.kind === 'food' ? [
                 {
                     category: 'drink',
                     quantity: people,
                     unit: 'servings',
-                    priority: 'preferred'
+                    priority: 'preferred',
+                    label: 'drinks'
                 }
             ] : [],
             {
                 category: 'transportation',
                 quantity: 1,
                 unit: 'vehicle',
-                priority: 'required'
+                priority: 'required',
+                label: 'transportation'
             }
         ],
         status: 'Draft',
@@ -424,6 +667,22 @@ export function optimize(resources, mission, volunteer) {
     };
 }
 export function match(m, resources, volunteer) {
+    if (m.coordinatesResolved === false) {
+        m.matches = [];
+        m.route = [];
+        m.communityValue = 0;
+        m.originalCost = 0;
+        m.gap = 0;
+        m.distance = 0;
+        m.duration = 0;
+        return {
+            mission: m,
+            missing: m.requirements.map((r)=>({
+                    ...r,
+                    missing: r.quantity
+                }))
+        };
+    }
     if (!Number.isInteger(m.deadline) || m.deadline < 960 || m.deadline > 1439) {
         m.matches = [];
         m.route = [];
@@ -442,13 +701,7 @@ export function match(m, resources, volunteer) {
     let missing = [];
     for (const req of m.requirements){
         let remaining = req.quantity;
-        const candidates = resources.filter((r)=>(r.category === req.category || req.category === 'meal' && r.category === 'side') && r.coordinatesResolved !== false && (!r.missionId || r.missionId === m.id) && [
-                'Available',
-                'Matched'
-            ].includes(r.status) && r.availableFrom < m.deadline && r.availableUntil >= Math.max(975, r.availableFrom) + 15 && (r.storageType === 'Room temperature' || m.refrigeration && [
-                'Refrigerated',
-                'Frozen'
-            ].includes(r.storageType)) && m.dietaryTags.every((t)=>r.dietaryTags.includes(t)));
+        const candidates = resources.filter((r)=>eligibility(r, req, m).ok);
         candidates.sort((a, b)=>score(b, req, m) - score(a, req, m));
         for (const r of candidates){
             if (remaining <= 0) break;
@@ -459,12 +712,27 @@ export function match(m, resources, volunteer) {
             const value = r.estimatedValue * allocation / r.quantity;
             results.push({
                 resourceId: r.id,
+                requirementCategory: req.category,
+                requirementLabel: req.label || req.category,
+                requiredQuantity: req.quantity,
                 allocatedQuantity: allocation,
                 fulfilledQuantity: actual,
+                remainingQuantity: Math.max(0, Math.round((remaining - actual) * 100) / 100),
                 category: req.category,
                 value,
                 matchScore: score(r, req, m),
-                reason: `Provides ${Math.round(actual / req.quantity * 100)}% of your ${req.category} requirement, ${distance(r, m).toFixed(1)} miles away. Pickup before ${time(r.availableUntil)}; ${r.storageType.toLowerCase()} storage fits.`
+                reasonCodes: [
+                    'category_match',
+                    actual >= remaining ? 'quantity_full' : 'quantity_partial',
+                    'pickup_window_open',
+                    r.storageType === 'Room temperature' ? 'storage_compatible' : 'refrigeration_compatible',
+                    ...m.dietaryTags.length ? [
+                        'dietary_compatible'
+                    ] : [],
+                    'location_verified'
+                ],
+                reasons: describeReasons(m, r, req, actual),
+                reason: describeMatch(m, r, req, actual)
             });
             remaining -= actual;
         }
@@ -486,7 +754,7 @@ export function match(m, resources, volunteer) {
     }
     m.matches = results;
     m.communityValue = Math.round(results.reduce((s, x)=>s + x.value, 0) * 100) / 100;
-    const purchase = missing.reduce((s, x)=>s + x.missing * (x.category === 'meal' ? 1.4 : x.category === 'drink' ? .4 : x.category === 'supplies' ? 10 : 25), 0);
+    const purchase = missing.reduce((s, x)=>s + x.missing * (x.category === 'meal' ? 1.4 : x.category === 'drink' ? .4 : x.category === 'supplies' ? 10 : x.category === 'unsupported' ? 0 : 25), 0);
     m.originalCost = Math.round((m.communityValue + purchase) * 100) / 100;
     m.gap = Math.round(purchase * 100) / 100;
     m.route = plan.stops;
@@ -504,20 +772,61 @@ function score(r, req, m) {
 export function outstanding(m) {
     return Math.max(0, Math.round((m.gap - m.contributions.reduce((s, x)=>s + x.amount, 0)) * 100) / 100);
 }
+export function funded(m) {
+    return Math.round(m.contributions.reduce((s, x)=>s + x.amount, 0) * 100) / 100;
+}
+export function shortages(m) {
+    return coverage(m).filter((r)=>![
+            'transportation',
+            'space',
+            'unsupported'
+        ].includes(r.category) && r.remaining > 0).map((r)=>({
+            category: r.category,
+            label: r.label,
+            quantity: r.required,
+            unit: r.unit,
+            priority: r.priority,
+            missing: r.remaining
+        }));
+}
+export function missionFocus(m) {
+    const r = m.requirements.find((r)=>r.category !== 'transportation' && r.category !== 'space');
+    return r?.category || 'supplies';
+}
+export function focusLabel(m) {
+    const c = missionFocus(m);
+    if (c === 'supplies') return /school|student/i.test(m.description || '') ? 'school supplies' : 'supplies';
+    if (c === 'meal') return 'meals';
+    if (c === 'drink') return 'drinks';
+    if (c === 'space') return 'space';
+    return 'resources';
+}
+export function routeSummary(m) {
+    return `Help deliver ${focusLabel(m)} for ${m.people} people.`;
+}
+export function fundable(m) {
+    return m.status !== 'Draft' && m.status !== 'Completed' && m.matches.length > 0 && outstanding(m) > 0;
+}
+export function fundedNote(m) {
+    const total = funded(m);
+    return total > 0 ? `${money(total)} in sponsor funding covered the remaining gap; purchases are simulated in this demo.` : '';
+}
 export function fund(m, amount, name) {
     if (!Number.isFinite(amount) || amount <= 0) return 0;
     const alreadyFunded = m.contributions.reduce((s, x)=>s + x.amount, 0);
     const remainingBudget = Math.max(0, m.budget - alreadyFunded);
     const a = Math.min(amount, outstanding(m), remainingBudget);
-    if (a > 0) m.contributions.push({
-        id: uid(),
-        missionId: m.id,
-        amount: a,
-        sponsorName: name || 'Community sponsor',
-        createdAt: new Date().toISOString(),
-        simulated: true
-    });
-    if (outstanding(m) === 0) m.status = 'Funded';
+    if (a > 0) {
+        m.contributions.push({
+            id: uid(),
+            missionId: m.id,
+            amount: a,
+            sponsorName: name || 'Community sponsor',
+            createdAt: new Date().toISOString(),
+            simulated: true
+        });
+        if (outstanding(m) === 0 && m.status !== 'Completed') m.status = 'Funded';
+    }
     return a;
 }
 export function completeStop(m) {

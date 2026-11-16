@@ -47,26 +47,34 @@ function authButtons() {
     if (top && !top.querySelector('.auth-entry-top')) top.insertAdjacentHTML('beforeend', '<div class="auth-entry-top"><button class="btn text" data-auth="login">Log in</button><button class="btn primary" data-auth="signup">Sign up</button></div>');
 }
 function profileControls() {
-    document.querySelector('.demo-dot')?.replaceChildren(document.createTextNode(`Signed in · ${user?.name || user?.email || 'MissionMesh user'}`));
+    const label = `Signed in · ${user?.name || user?.email || 'MissionMesh user'}`;
+    const dot = document.querySelector('.demo-dot');
+    if (dot && dot.textContent !== label) dot.replaceChildren(document.createTextNode(label));
     const top = document.querySelector('.top-actions');
     if (!top) return;
     top.querySelector('.role-switch')?.setAttribute('hidden', 'true');
     if (!top.querySelector('.auth-profile')) top.insertAdjacentHTML('beforeend', `<div class="auth-profile"><span class="auth-avatar">${esc((user?.name || user?.email || 'M').slice(0, 1).toUpperCase())}</span><span>${esc(user?.name || user?.email || 'Account')}</span><button class="btn text" data-auth="logout">Log out</button></div>`);
 }
+function authClick(event) {
+    const el = event.target.closest('[data-auth]');
+    if (!el) return;
+    const action = el.dataset.auth;
+    try {
+        if (action === 'logout') logout();
+        else login(action === 'signup');
+    } catch (error) {
+        const toast = document.querySelector('#toast');
+        if (toast) {
+            toast.textContent = error instanceof Error ? error.message : 'Authentication could not start.';
+            toast.classList.add('show');
+        }
+    }
+}
 function bind() {
-    document.querySelectorAll('[data-auth]').forEach((el)=>el.addEventListener('click', async ()=>{
-            const action = el.dataset.auth;
-            try {
-                if (action === 'logout') await logout();
-                else await login(action === 'signup');
-            } catch (error) {
-                const toast = document.querySelector('#toast');
-                if (toast) {
-                    toast.textContent = error instanceof Error ? error.message : 'Authentication could not start.';
-                    toast.classList.add('show');
-                }
-            }
-        }));
+    if (!document.body.dataset.authBound) {
+        document.body.dataset.authBound = 'true';
+        document.addEventListener('click', authClick);
+    }
     const form = document.querySelector('#auth-onboarding-form');
     if (form) {
         document.querySelectorAll('input[name=role]').forEach((input)=>input.addEventListener('change', ()=>{
@@ -99,6 +107,14 @@ async function start() {
         if (user) profileControls();
         else authButtons();
         bind();
+        const refresh = ()=>{
+            if (!user) return authButtons();
+            if (getProfile(user)) profileControls();
+        };
+        new MutationObserver(refresh).observe(document.getElementById('app'), {
+            childList: true,
+            subtree: true
+        });
     } catch (error) {
         document.querySelector('#app').insertAdjacentHTML('afterbegin', '<div class="auth-error">Authentication setup could not be loaded. Demo mode remains available.</div>');
         authButtons();
